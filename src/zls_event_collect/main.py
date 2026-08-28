@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Final
 
 from .collector import CollectionError, NewsCollector
-from .models import NewsArticle
+from .models import NewsArticle, NormalizedEvent
+from .normalizer import normalize_articles
 
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ def select_event_candidates(articles: Iterable[NewsArticle]) -> list[NewsArticle
     return events
 
 
-def write_events(events: Sequence[NewsArticle], output_path: Path) -> None:
+def write_events(events: Sequence[NormalizedEvent], output_path: Path) -> None:
     """途中失敗で既存JSONを壊さないよう、一時ファイルから置換する。"""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +86,8 @@ def run(output_path: Path = DEFAULT_OUTPUT_PATH) -> int:
     collector = NewsCollector()
     try:
         articles = collector.collect()
-        events = select_event_candidates(articles)
+        candidates = select_event_candidates(articles)
+        events = normalize_articles(candidates)
         write_events(events, output_path)
     except CollectionError as exc:
         logger.error("収集に失敗しました: %s", exc)
@@ -100,7 +102,9 @@ def run(output_path: Path = DEFAULT_OUTPUT_PATH) -> int:
     finally:
         collector.close()
 
-    logger.info("イベント候補を %d 件、%s に保存しました", len(events), output_path)
+    logger.info(
+        "正規化イベント候補を %d 件、%s に保存しました", len(events), output_path
+    )
     return 0
 
 

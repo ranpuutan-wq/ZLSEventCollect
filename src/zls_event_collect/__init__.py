@@ -1,5 +1,5 @@
-"""ゾンビランドサガ公式NEWSのイベント候補収集パッケージ。"""
+"""ゾンビランドサガ公式NEWSのイベント候補収集・正規化パッケージ。"""
 
-from .models import NewsArticle
+from .models import DateMention, NewsArticle, NormalizedEvent
 
-__all__ = ["NewsArticle"]
+__all__ = ["DateMention", "NewsArticle", "NormalizedEvent"]
