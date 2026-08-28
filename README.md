@@ -1,8 +1,8 @@
 # ZLSEventCollect
 
-「ゾンビランドサガ」公式サイトの NEWS から、イベントに関係しそうな記事を収集して JSON に保存する Python アプリです。
+「ゾンビランドサガ」公式サイトの NEWS から、イベントに関係しそうな記事を収集し、根拠付きの正規化情報を JSON に保存する Python アプリです。
 
-Phase 1 では次の2つの公式 NEWS を対象にします。イベント情報の正規化、内容ベースの重複排除、Notion・X (Twitter)・LLM との連携は対象外です。
+Phase 2 では次の2つの公式 NEWS を対象にします。内容ベースの重複排除、Notion・X (Twitter)・LLM との連携は対象外です。
 
 - [TV アニメ「ゾンビランドサガ リベンジ」公式 NEWS](https://zombielandsaga.com/news/)
 - [劇場版「ゾンビランドサガ ゆめぎんがパラダイス」公式 NEWS](https://zombielandsaga-movie.com/news/)
@@ -43,9 +43,22 @@ python -m zls_event_collect --output output/custom-events.json --log-level DEBUG
   "published_at": "2025-07-29",
   "source_url": "https://zombielandsaga-movie.com/news/detail.php?id=...",
   "source": "zombielandsaga_official",
-  "raw_text": "記事本文"
+  "raw_text": "記事本文",
+  "event_name": "公式記事タイトル",
+  "event_types": ["event", "live"],
+  "date_mentions": [
+    {
+      "raw_text": "開催日時：2027年4月24日(土) 開演 16:00",
+      "dates": ["2027-04-24"],
+      "times": ["16:00"]
+    }
+  ],
+  "venue_mentions": ["SAGAアリーナ"],
+  "normalization_version": 1
 }
 ```
+
+正規化された日付・時刻には必ず元の記述を `raw_text` として残します。公演日、申込期間、販売期間などが同じ記事に混在するため、Phase 2では根拠なく単一の `start_at` / `end_at` に決めません。年が省略された月日は、同じ原文行に先行する西暦がある場合だけ補完します。会場は「会場」「開催場所」「開催店舗」「販売場所」の明示ラベルがある場合だけ候補として取り出します。
 
 タイトルまたは本文に次のいずれかを含む記事がイベント候補になります。
 
@@ -68,7 +81,8 @@ src/zls_event_collect/
 ├── collector.py  # HTTP取得、ページング、失敗時の継続
 ├── parser.py     # 一覧・詳細HTMLの解析
 ├── models.py     # 出力データモデル
-└── main.py       # 抽出、重複排除、JSON保存、CLI
+├── normalizer.py # 種別・日付・時刻・会場候補の正規化
+└── main.py       # 抽出、正規化、重複排除、JSON保存、CLI
 ```
 
-Phase 1 の計画と受け入れ条件は [Issue #1](https://github.com/ranpuutan-wq/ZLSEventCollect/issues/1) にあります。
+Phase 2 の計画と受け入れ条件は [Issue #3](https://github.com/ranpuutan-wq/ZLSEventCollect/issues/3) にあります。
