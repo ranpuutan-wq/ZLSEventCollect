@@ -62,7 +62,8 @@ def test_write_events_outputs_utf8_json_with_required_fields(tmp_path) -> None:
             "event_name": "上映決定",
             "event_types": ["event", "screening"],
             "date_mentions": [],
+            "event_date_ranges": [],
             "venue_mentions": [],
-            "normalization_version": 1,
+            "normalization_version": 2,
         }
     ]

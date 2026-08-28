@@ -5,7 +5,13 @@ import unicodedata
 from collections.abc import Iterable
 from datetime import date
 
-from .models import DateMention, EventType, NewsArticle, NormalizedEvent
+from .models import (
+    DateMention,
+    EventDateRange,
+    EventType,
+    NewsArticle,
+    NormalizedEvent,
+)
 
 
 EVENT_TYPE_RULES: tuple[tuple[EventType, tuple[str, ...]], ...] = (
@@ -22,7 +28,7 @@ EVENT_TYPE_RULES: tuple[tuple[EventType, tuple[str, ...]], ...] = (
 
 DATE_TOKEN_PATTERN = re.compile(
     r"(?:(?P<year>\d{4})年\s*)?"
-    r"(?P<month>\d{1,2})月\s*(?P<day>\d{1,2})日"
+    r"(?:(?P<month>\d{1,2})月\s*)?(?P<day>\d{1,2})日"
 )
 TIME_TOKEN_PATTERN = re.compile(
     r"(?<!\d)(?P<ampm>午前|午後)?\s*(?P<hour>\d{1,2})"
@@ -33,6 +39,17 @@ VENUE_LABEL_PATTERN = re.compile(
     r"(?P<label>開催場所|開催店舗|販売場所|会場)"
     r"[】\]]?\s*(?:[：:]\s*(?P<value>.+))?$"
 )
+EVENT_DATE_LABEL_PATTERN = re.compile(
+    r"^[\s■●◆◇▼▽・※✅]*[【\[＜<〈]?"
+    r"(?P<label>開催期間|開催日時|開催日|実施日|公演日時|公演日|日程|会期)"
+    r"[】\]＞>〉]?\s*(?:[：:]\s*)?(?P<value>.*)$"
+)
+EVENT_DATE_EXCLUDED_PATTERN = re.compile(
+    r"^[\s■●◆◇▼▽・※✅]*"
+    r"(?:申込|申し込み|受付|販売|発売|予約|応募|エントリー|チケット)"
+)
+DATE_RANGE_SEPARATOR_PATTERN = re.compile(r"[～〜~]|から")
+BULLET_ONLY_PATTERN = re.compile(r"^[\s・•●○■□◆◇※]+$")
 
 
 def _unique(values: Iterable[str]) -> tuple[str, ...]:
@@ -50,25 +67,35 @@ def extract_event_types(article: NewsArticle) -> tuple[EventType, ...]:
     )
 
 
-def _extract_dates(line: str) -> tuple[str, ...]:
+def _extract_date_occurrences(line: str) -> list[tuple[str, int, int, bool]]:
     current_year: int | None = None
-    dates: list[str] = []
+    current_month: int | None = None
+    occurrences: list[tuple[str, int, int, bool]] = []
     for match in DATE_TOKEN_PATTERN.finditer(line):
         raw_year = match.group("year")
         if raw_year is not None:
             current_year = int(raw_year)
-        if current_year is None:
+        raw_month = match.group("month")
+        if raw_month is not None:
+            current_month = int(raw_month)
+        if current_year is None or current_month is None:
             continue
         try:
             normalized = date(
                 current_year,
-                int(match.group("month")),
+                current_month,
                 int(match.group("day")),
             ).isoformat()
         except ValueError:
             continue
-        dates.append(normalized)
-    return _unique(dates)
+        occurrences.append(
+            (normalized, match.start(), match.end(), raw_year is not None)
+        )
+    return occurrences
+
+
+def _extract_dates(line: str) -> tuple[str, ...]:
+    return _unique(value for value, _, _, _ in _extract_date_occurrences(line))
 
 
 def _normalize_time(match: re.Match[str]) -> str | None:
@@ -117,6 +144,94 @@ def extract_date_mentions(article: NewsArticle) -> tuple[DateMention, ...]:
         seen.add(key)
         mentions.append(DateMention(raw_text=raw_text, dates=dates, times=times))
     return tuple(mentions)
+
+
+def _date_ranges_from_line(raw_text: str) -> list[EventDateRange]:
+    normalized_line = unicodedata.normalize("NFKC", raw_text)
+    occurrences = _extract_date_occurrences(normalized_line)
+    ranges: list[EventDateRange] = []
+    index = 0
+    while index < len(occurrences):
+        start_date, _, start_end, _ = occurrences[index]
+        if index + 1 < len(occurrences):
+            end_date, end_start, _, end_has_year = occurrences[index + 1]
+            separator_text = normalized_line[start_end:end_start]
+            has_range_separator = DATE_RANGE_SEPARATOR_PATTERN.search(separator_text)
+            if has_range_separator:
+                if end_date < start_date and not end_has_year:
+                    end = date.fromisoformat(end_date)
+                    try:
+                        end_date = end.replace(year=end.year + 1).isoformat()
+                    except ValueError:
+                        pass
+            if has_range_separator and start_date <= end_date:
+                ranges.append(
+                    EventDateRange(
+                        raw_text=raw_text,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                )
+                index += 2
+                continue
+        ranges.append(
+            EventDateRange(
+                raw_text=raw_text,
+                start_date=start_date,
+                end_date=None,
+            )
+        )
+        index += 1
+    return ranges
+
+
+def extract_event_date_ranges(article: NewsArticle) -> tuple[EventDateRange, ...]:
+    """開催日程の明示ラベルまたは開催表現がある行だけを正規化する。"""
+
+    ranges: list[EventDateRange] = []
+    seen: set[tuple[str, str, str | None]] = set()
+    in_date_section = False
+
+    for raw_line in (article.title, *article.raw_text.splitlines()):
+        raw_text = " ".join(raw_line.split())
+        if not raw_text:
+            continue
+        normalized_line = unicodedata.normalize("NFKC", raw_text)
+        label_match = EVENT_DATE_LABEL_PATTERN.fullmatch(normalized_line)
+
+        is_date_evidence = False
+        if label_match is not None and not EVENT_DATE_EXCLUDED_PATTERN.search(
+            normalized_line
+        ):
+            in_date_section = not bool(label_match.group("value").strip())
+            is_date_evidence = True
+        elif in_date_section:
+            if BULLET_ONLY_PATTERN.fullmatch(normalized_line):
+                continue
+            if _extract_dates(normalized_line):
+                is_date_evidence = True
+            else:
+                in_date_section = False
+        elif "開催" in normalized_line and not EVENT_DATE_EXCLUDED_PATTERN.search(
+            normalized_line
+        ):
+            is_date_evidence = True
+
+        if not is_date_evidence:
+            continue
+        line_ranges = _date_ranges_from_line(raw_text)
+        for date_range in line_ranges:
+            key = (
+                date_range.raw_text,
+                date_range.start_date,
+                date_range.end_date,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            ranges.append(date_range)
+
+    return tuple(ranges)
 
 
 def _venue_value_is_usable(value: str) -> bool:
@@ -173,6 +288,7 @@ def normalize_article(article: NewsArticle) -> NormalizedEvent:
         event_name=article.title,
         event_types=extract_event_types(article),
         date_mentions=extract_date_mentions(article),
+        event_date_ranges=extract_event_date_ranges(article),
         venue_mentions=extract_venue_mentions(article),
     )
 
